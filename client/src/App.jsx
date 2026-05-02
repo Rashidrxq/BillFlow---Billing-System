@@ -6,15 +6,26 @@ import Invoice from './Invoice';
 function MainApp() {
   const [products, setProducts] = useState([]);
   const [name, setName] = useState('');
-  const [price, setPrice] = useState('');
-  const [stock, setStock] = useState('');
+  const [brand, setBrand] = useState('');
+  const [costPrice, setCostPrice] = useState('');
+  const [sellPrice, setSellPrice] = useState('');
+  const [unit, setUnit] = useState('pcs');
+  const [stockQuantity, setStockQuantity] = useState('0');
 
   const [cart, setCart] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [paymentMode, setPaymentMode] = useState('Cash');
+  const [backendError, setBackendError] = useState(null);
 
   const [invoiceId, setInvoiceId] = useState(null);
+  const [purchaseProductId, setPurchaseProductId] = useState('');
+  const [purchaseVendor, setPurchaseVendor] = useState('');
+  const [purchaseQuantity, setPurchaseQuantity] = useState('0');
+  const [purchaseCost, setPurchaseCost] = useState('');
+  const [purchaseReference, setPurchaseReference] = useState('');
+
+  const units = ['pcs', 'kg', 'g', 'ltr', 'box'];
   const GST_RATE = 0.18;
   const subTotal = cart.reduce((sum, item) => sum + item.total, 0);
   const gstAmount = parseFloat((subTotal * GST_RATE).toFixed(2));
@@ -24,8 +35,21 @@ function MainApp() {
 
   const fetchProducts = () => {
     fetch('http://localhost:3000/products')
-      .then(res => res.json())
-      .then(data => setProducts(data));
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`Server responded ${res.status}`);
+        }
+        return res.json();
+      })
+      .then(data => {
+        setProducts(data);
+        setBackendError(null);
+      })
+      .catch(err => {
+        console.error('Failed to load products:', err);
+        setProducts([]);
+        setBackendError('Backend unavailable at http://localhost:3000. Start the server and refresh.');
+      });
   };
 
   useEffect(() => {
@@ -36,13 +60,52 @@ function MainApp() {
     fetch('http://localhost:3000/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, price, stock })
+      body: JSON.stringify({
+        name,
+        brand,
+        unit,
+        costPrice: Number(costPrice),
+        sellPrice: Number(sellPrice),
+        stockQuantity: Number(stockQuantity)
+      })
     })
       .then(res => res.json())
       .then(() => {
         setName('');
-        setPrice('');
-        setStock('');
+        setBrand('');
+        setCostPrice('');
+        setSellPrice('');
+        setUnit('pcs');
+        setStockQuantity('0');
+        fetchProducts();
+      });
+  };
+
+  const purchaseInventory = () => {
+    if (!purchaseProductId) {
+      alert('Select a product to purchase');
+      return;
+    }
+
+    fetch('http://localhost:3000/purchase', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        productId: Number(purchaseProductId),
+        vendor: purchaseVendor,
+        quantity: Number(purchaseQuantity),
+        unit: products.find(p => p.id == purchaseProductId)?.unit || 'pcs',
+        costPrice: Number(purchaseCost),
+        reference: purchaseReference
+      })
+    })
+      .then(res => res.json())
+      .then(() => {
+        setPurchaseProductId('');
+        setPurchaseVendor('');
+        setPurchaseQuantity('0');
+        setPurchaseCost('');
+        setPurchaseReference('');
         fetchProducts();
       });
   };
@@ -57,10 +120,15 @@ function MainApp() {
     const product = products.find(p => p.id == selectedProduct);
     if (!product) return;
 
+    const quantityNumber = Number(quantity);
+    const price = Number(product.sell_price ?? 0);
     const item = {
-      ...product,
-      quantity: Number(quantity),
-      total: product.price * quantity
+      id: product.id,
+      name: product.name,
+      unit: product.unit || 'pcs',
+      quantity: quantityNumber,
+      price,
+      total: price * quantityNumber
     };
 
     setCart([...cart, item]);
@@ -96,17 +164,22 @@ function MainApp() {
 
   return (
     <div className="app-shell">
+      {backendError && (
+        <div className="error-banner">
+          {backendError}
+        </div>
+      )}
       <header className="app-header">
         <div>
           <p className="eyebrow">Enterprise Retail POS</p>
           <h1>BillFlow Enterprise</h1>
-          <p className="intro-text">A polished billing dashboard for store teams. Manage products, track GST, and generate invoice-ready receipts with QR delivery.</p>
+          <p className="intro-text">Track purchases and sales with real inventory control, units, cost vs sell price, and GST-ready invoices.</p>
         </div>
 
         <div className="status-card">
           <span>Live products</span>
           <strong>{products.length}</strong>
-          <p>Inventory and invoice creation in a professional workflow.</p>
+          <p>Accurate stock balances with purchase history and automated inventory updates.</p>
         </div>
       </header>
 
@@ -115,7 +188,7 @@ function MainApp() {
           <div className="section-header">
             <div>
               <h2>Product catalog</h2>
-              <p>Maintain pricing and stock with enterprise-grade clarity.</p>
+              <p>Products now carry brand, unit, cost price, selling price, and stock levels.</p>
             </div>
           </div>
 
@@ -124,17 +197,63 @@ function MainApp() {
             <div className="form-grid">
               <div className="field">
                 <label>Product name</label>
-                <input className="input-field" placeholder="e.g. Premium Apples" value={name} onChange={e => setName(e.target.value)} />
+                <input className="input-field" value={name} onChange={e => setName(e.target.value)} placeholder="Fresh Apples" />
               </div>
               <div className="field">
-                <label>Unit price</label>
-                <input className="input-field" type="number" min="0" placeholder="₹0" value={price} onChange={e => setPrice(e.target.value)} />
+                <label>Brand</label>
+                <input className="input-field" value={brand} onChange={e => setBrand(e.target.value)} placeholder="Brand name" />
               </div>
               <div className="field">
-                <label>Stock available</label>
-                <input className="input-field" type="number" min="0" placeholder="0" value={stock} onChange={e => setStock(e.target.value)} />
+                <label>Unit</label>
+                <select className="input-field" value={unit} onChange={e => setUnit(e.target.value)}>
+                  {units.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <label>Cost price</label>
+                <input className="input-field" type="number" min="0" step="0.01" value={costPrice} onChange={e => setCostPrice(e.target.value)} placeholder="0" />
+              </div>
+              <div className="field">
+                <label>Selling price</label>
+                <input className="input-field" type="number" min="0" step="0.01" value={sellPrice} onChange={e => setSellPrice(e.target.value)} placeholder="0" />
+              </div>
+              <div className="field">
+                <label>Stock quantity</label>
+                <input className="input-field" type="number" min="0" step="0.001" value={stockQuantity} onChange={e => setStockQuantity(e.target.value)} placeholder="0" />
               </div>
               <button type="button" className="button button-primary" onClick={addProduct}>Add product</button>
+            </div>
+          </div>
+
+          <div className="panel form-panel">
+            <div className="card-title">Record purchase</div>
+            <div className="form-grid">
+              <div className="field">
+                <label>Product</label>
+                <select className="input-field" value={purchaseProductId} onChange={e => setPurchaseProductId(e.target.value)}>
+                  <option value="">Select product</option>
+                  {products.map(p => (
+                    <option key={p.id} value={p.id}>{p.name} ({p.unit})</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Vendor</label>
+                <input className="input-field" value={purchaseVendor} onChange={e => setPurchaseVendor(e.target.value)} placeholder="Vendor or supplier" />
+              </div>
+              <div className="field">
+                <label>Quantity</label>
+                <input className="input-field" type="number" min="0" step="0.001" value={purchaseQuantity} onChange={e => setPurchaseQuantity(e.target.value)} placeholder="0" />
+              </div>
+              <div className="field">
+                <label>Cost per unit</label>
+                <input className="input-field" type="number" min="0" step="0.01" value={purchaseCost} onChange={e => setPurchaseCost(e.target.value)} placeholder="0" />
+              </div>
+              <div className="field">
+                <label>Reference</label>
+                <input className="input-field" value={purchaseReference} onChange={e => setPurchaseReference(e.target.value)} placeholder="Purchase invoice / receipt" />
+              </div>
+              <button type="button" className="button button-primary" onClick={purchaseInventory}>Record purchase</button>
             </div>
           </div>
 
@@ -143,8 +262,11 @@ function MainApp() {
             <div className="product-table">
               <div className="table-row table-head">
                 <span>Product</span>
-                <span>Price</span>
+                <span>Brand</span>
+                <span>Cost</span>
+                <span>Sell</span>
                 <span>Stock</span>
+                <span>Unit</span>
                 <span>Action</span>
               </div>
               {products.length === 0 ? (
@@ -153,8 +275,11 @@ function MainApp() {
                 products.map(p => (
                   <div key={p.id} className="table-row">
                     <span>{p.name}</span>
-                    <span>₹{p.price.toFixed(2)}</span>
-                    <span>{p.stock}</span>
+                    <span>{p.brand || '-'}</span>
+                    <span>₹{Number(p.cost_price ?? 0).toFixed(2)}</span>
+                    <span>₹{Number(p.sell_price ?? 0).toFixed(2)}</span>
+                    <span>{p.stock_quantity ?? 0}</span>
+                    <span>{p.unit || '-'}</span>
                     <button type="button" className="button button-ghost" onClick={() => deleteProduct(p.id)}>Delete</button>
                   </div>
                 ))
@@ -167,7 +292,7 @@ function MainApp() {
           <div className="section-header">
             <div>
               <h2>Billing desk</h2>
-              <p>Build invoices quickly, with GST and payment mode tracking.</p>
+              <p>Create sales invoices and automatically reduce stock for each item sold.</p>
             </div>
           </div>
 
@@ -178,13 +303,13 @@ function MainApp() {
                 <select className="input-field" onChange={e => setSelectedProduct(e.target.value)} value={selectedProduct}>
                   <option value="">Select product</option>
                   {products.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} — ₹{p.price.toFixed(2)}</option>
+                    <option key={p.id} value={p.id}>{p.name} — ₹{Number(p.sell_price ?? 0).toFixed(2)} / {p.unit || '-'}</option>
                   ))}
                 </select>
               </div>
               <div className="field">
                 <label>Quantity</label>
-                <input className="input-field" type="number" min="1" value={quantity} onChange={e => setQuantity(e.target.value)} />
+                <input className="input-field" type="number" min="1" step="0.001" value={quantity} onChange={e => setQuantity(e.target.value)} />
               </div>
               <div className="field">
                 <label>Payment mode</label>
@@ -205,7 +330,7 @@ function MainApp() {
                   <div className="cart-item" key={index}>
                     <div>
                       <div className="item-name">{item.name}</div>
-                      <div className="item-meta">Qty {item.quantity}</div>
+                      <div className="item-meta">Qty {item.quantity} {item.unit}</div>
                     </div>
                     <div className="item-total">₹{item.total.toFixed(2)}</div>
                   </div>
