@@ -1,7 +1,14 @@
-﻿import { useEffect, useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
-import { QRCodeCanvas } from 'qrcode.react';
+import { useEffect, useMemo, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Plus, Trash2, ShoppingCart, ArrowRight, Package, CreditCard, History } from 'lucide-react';
 import Invoice from './Invoice';
+import { createInvoice, createProduct, getProducts, recordPurchase, removeProduct } from './api';
+import TopNav from './components/TopNav';
+import StorySection from './components/StorySection';
+import './App.css';
+
+const GST_RATE = 0.18;
 
 function MainApp() {
   const [products, setProducts] = useState([]);
@@ -11,356 +18,246 @@ function MainApp() {
   const [sellPrice, setSellPrice] = useState('');
   const [unit, setUnit] = useState('pcs');
   const [stockQuantity, setStockQuantity] = useState('0');
-
   const [cart, setCart] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [paymentMode, setPaymentMode] = useState('Cash');
-  const [backendError, setBackendError] = useState(null);
-
   const [invoiceId, setInvoiceId] = useState(null);
   const [purchaseProductId, setPurchaseProductId] = useState('');
   const [purchaseVendor, setPurchaseVendor] = useState('');
   const [purchaseQuantity, setPurchaseQuantity] = useState('0');
   const [purchaseCost, setPurchaseCost] = useState('');
   const [purchaseReference, setPurchaseReference] = useState('');
+  const [feedback, setFeedback] = useState({ type: '', message: '' });
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const units = ['pcs', 'kg', 'g', 'ltr', 'box'];
-  const GST_RATE = 0.18;
-  const subTotal = cart.reduce((sum, item) => sum + item.total, 0);
-  const gstAmount = parseFloat((subTotal * GST_RATE).toFixed(2));
-  const totalWithTax = parseFloat((subTotal + gstAmount).toFixed(2));
 
-  const navigate = useNavigate();
+  const clearFeedback = () => setFeedback({ type: '', message: '' });
+  const showError = (message) => setFeedback({ type: 'error', message });
+  const showSuccess = (message) => setFeedback({ type: 'success', message });
 
-  const fetchProducts = () => {
-    fetch('http://localhost:3000/products')
-      .then(res => {
-        if (!res.ok) {
-          throw new Error(`Server responded ${res.status}`);
-        }
-        return res.json();
-      })
-      .then(data => {
-        setProducts(data);
-        setBackendError(null);
-      })
-      .catch(err => {
-        console.error('Failed to load products:', err);
-        setProducts([]);
-        setBackendError('Backend unavailable at http://localhost:3000. Start the server and refresh.');
-      });
+  const parseNumberField = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  };
+
+  const subTotal = useMemo(() => cart.reduce((sum, item) => sum + item.total, 0), [cart]);
+  const gstAmount = useMemo(() => parseFloat((subTotal * GST_RATE).toFixed(2)), [subTotal]);
+  const totalWithTax = useMemo(() => parseFloat((subTotal + gstAmount).toFixed(2)), [subTotal, gstAmount]);
+  const invoiceURL = invoiceId ? `${window.location.origin}/invoice/${invoiceId}` : '';
+
+  const fetchProducts = async () => {
+    setIsLoading(true);
+    try {
+      const items = await getProducts();
+      setProducts(items);
+    } catch (err) {
+      showError('Unable to load catalog.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
     fetchProducts();
   }, []);
 
-  const addProduct = () => {
-    fetch('http://localhost:3000/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        brand,
+  const addProduct = async () => {
+    const cost = parseNumberField(costPrice);
+    const sell = parseNumberField(sellPrice);
+    const stock = parseNumberField(stockQuantity);
+
+    if (!name) return showError('Product name is required.');
+    
+    setIsSaving(true);
+    try {
+      await createProduct({
+        name: name.trim(),
+        brand: brand.trim() || null,
         unit,
-        costPrice: Number(costPrice),
-        sellPrice: Number(sellPrice),
-        stockQuantity: Number(stockQuantity)
-      })
-    })
-      .then(res => res.json())
-      .then(() => {
-        setName('');
-        setBrand('');
-        setCostPrice('');
-        setSellPrice('');
-        setUnit('pcs');
-        setStockQuantity('0');
-        fetchProducts();
+        costPrice: cost,
+        sellPrice: sell,
+        stockQuantity: stock,
       });
-  };
-
-  const purchaseInventory = () => {
-    if (!purchaseProductId) {
-      alert('Select a product to purchase');
-      return;
+      setName('');
+      setBrand('');
+      setCostPrice('');
+      setSellPrice('');
+      showSuccess('Item added to catalog.');
+      await fetchProducts();
+    } catch (err) {
+      showError('Error adding product.');
+    } finally {
+      setIsSaving(false);
     }
-
-    fetch('http://localhost:3000/purchase', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        productId: Number(purchaseProductId),
-        vendor: purchaseVendor,
-        quantity: Number(purchaseQuantity),
-        unit: products.find(p => p.id == purchaseProductId)?.unit || 'pcs',
-        costPrice: Number(purchaseCost),
-        reference: purchaseReference
-      })
-    })
-      .then(res => res.json())
-      .then(() => {
-        setPurchaseProductId('');
-        setPurchaseVendor('');
-        setPurchaseQuantity('0');
-        setPurchaseCost('');
-        setPurchaseReference('');
-        fetchProducts();
-      });
-  };
-
-  const deleteProduct = (id) => {
-    fetch(`http://localhost:3000/products/${id}`, {
-      method: 'DELETE'
-    }).then(() => fetchProducts());
   };
 
   const addToCart = () => {
-    const product = products.find(p => p.id == selectedProduct);
-    if (!product) return;
-
-    const quantityNumber = Number(quantity);
-    const price = Number(product.sell_price ?? 0);
+    const product = products.find((p) => p.id === Number(selectedProduct));
+    if (!product) return showError('Select a product.');
+    
     const item = {
       id: product.id,
       name: product.name,
       unit: product.unit || 'pcs',
-      quantity: quantityNumber,
-      price,
-      total: price * quantityNumber
+      quantity: Number(quantity),
+      price: Number(product.sell_price ?? 0),
+      total: parseFloat((Number(product.sell_price ?? 0) * quantity).toFixed(2)),
     };
 
     setCart([...cart, item]);
+    showSuccess('Added to cart.');
   };
 
-  const generateBill = () => {
-    if (cart.length === 0) {
-      alert('Cart is empty!');
-      return;
-    }
-
-    fetch('http://localhost:3000/invoice', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  const generateBill = async () => {
+    if (cart.length === 0) return showError('Cart is empty.');
+    setIsSaving(true);
+    try {
+      const data = await createInvoice({
         cart,
         subTotal,
         gstAmount,
         total: totalWithTax,
-        paymentMode
-      })
-    })
-      .then(res => res.json())
-      .then(data => {
-        setInvoiceId(data.invoiceId);
-        setCart([]);
+        paymentMode,
       });
+      setInvoiceId(data?.invoiceId ?? null);
+      setCart([]);
+      showSuccess('Invoice generated.');
+    } catch (err) {
+      showError('Error generating invoice.');
+    } finally {
+      setIsSaving(false);
+    }
   };
-
-  const invoiceURL = invoiceId
-    ? `${window.location.origin}/invoice/${invoiceId}`
-    : '';
 
   return (
     <div className="app-shell">
-      {backendError && (
-        <div className="error-banner">
-          {backendError}
+      <TopNav />
+      
+      {/* SECTION 1: HERO */}
+      <StorySection 
+        id="hero"
+        eyebrow="BillFlow Elite"
+        title={<>Billing, <span className="italic">Refined.</span></>}
+        subtitle="A premium storytelling experience for store management. Manage your catalog, track inventory, and generate GST-ready invoices with unmatched elegance."
+      >
+        <div className="scroll-indicator">
+          <div className="scroll-line"></div>
+          <span className="italic">Scroll to explore</span>
         </div>
-      )}
-      <header className="app-header">
-        <div>
-          <p className="eyebrow">Enterprise Retail POS</p>
-          <h1>BillFlow Enterprise</h1>
-          <p className="intro-text">Track purchases and sales with real inventory control, units, cost vs sell price, and GST-ready invoices.</p>
-        </div>
+      </StorySection>
 
-        <div className="status-card">
-          <span>Live products</span>
-          <strong>{products.length}</strong>
-          <p>Accurate stock balances with purchase history and automated inventory updates.</p>
-        </div>
-      </header>
-
-      <div className="layout-columns">
-        <section className="section">
-          <div className="section-header">
-            <div>
-              <h2>Product catalog</h2>
-              <p>Products now carry brand, unit, cost price, selling price, and stock levels.</p>
+      {/* SECTION 2: CATALOG */}
+      <StorySection 
+        id="products"
+        eyebrow="The Catalog"
+        title="Curate your Inventory"
+        subtitle="Every product tells a story. Add and manage your boutique's offerings with precision."
+      >
+        <div className="layout-split">
+          <div className="form-panel-premium">
+            <div className="field">
+              <label>Product Name</label>
+              <input value={name} onChange={e => setName(e.target.value)} className="input-field" placeholder="e.g. Vintage Leather Jacket" />
             </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Cost Price</label>
+                <input value={costPrice} onChange={e => setCostPrice(e.target.value)} className="input-field" placeholder="0.00" />
+              </div>
+              <div className="field">
+                <label>Sell Price</label>
+                <input value={sellPrice} onChange={e => setSellPrice(e.target.value)} className="input-field" placeholder="0.00" />
+              </div>
+            </div>
+            <button onClick={addProduct} className="button" disabled={isSaving}>
+              {isSaving ? 'Registering...' : 'Add to Collection'}
+            </button>
           </div>
 
-          <div className="panel form-panel">
-            <div className="card-title">Add new product</div>
-            <div className="form-grid">
-              <div className="field">
-                <label>Product name</label>
-                <input className="input-field" value={name} onChange={e => setName(e.target.value)} placeholder="Fresh Apples" />
-              </div>
-              <div className="field">
-                <label>Brand</label>
-                <input className="input-field" value={brand} onChange={e => setBrand(e.target.value)} placeholder="Brand name" />
-              </div>
-              <div className="field">
-                <label>Unit</label>
-                <select className="input-field" value={unit} onChange={e => setUnit(e.target.value)}>
-                  {units.map(u => <option key={u} value={u}>{u}</option>)}
-                </select>
-              </div>
-              <div className="field">
-                <label>Cost price</label>
-                <input className="input-field" type="number" min="0" step="0.01" value={costPrice} onChange={e => setCostPrice(e.target.value)} placeholder="0" />
-              </div>
-              <div className="field">
-                <label>Selling price</label>
-                <input className="input-field" type="number" min="0" step="0.01" value={sellPrice} onChange={e => setSellPrice(e.target.value)} placeholder="0" />
-              </div>
-              <div className="field">
-                <label>Stock quantity</label>
-                <input className="input-field" type="number" min="0" step="0.001" value={stockQuantity} onChange={e => setStockQuantity(e.target.value)} placeholder="0" />
-              </div>
-              <button type="button" className="button button-primary" onClick={addProduct}>Add product</button>
-            </div>
-          </div>
-
-          <div className="panel form-panel">
-            <div className="card-title">Record purchase</div>
-            <div className="form-grid">
-              <div className="field">
-                <label>Product</label>
-                <select className="input-field" value={purchaseProductId} onChange={e => setPurchaseProductId(e.target.value)}>
-                  <option value="">Select product</option>
-                  {products.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.unit})</option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>Vendor</label>
-                <input className="input-field" value={purchaseVendor} onChange={e => setPurchaseVendor(e.target.value)} placeholder="Vendor or supplier" />
-              </div>
-              <div className="field">
-                <label>Quantity</label>
-                <input className="input-field" type="number" min="0" step="0.001" value={purchaseQuantity} onChange={e => setPurchaseQuantity(e.target.value)} placeholder="0" />
-              </div>
-              <div className="field">
-                <label>Cost per unit</label>
-                <input className="input-field" type="number" min="0" step="0.01" value={purchaseCost} onChange={e => setPurchaseCost(e.target.value)} placeholder="0" />
-              </div>
-              <div className="field">
-                <label>Reference</label>
-                <input className="input-field" value={purchaseReference} onChange={e => setPurchaseReference(e.target.value)} placeholder="Purchase invoice / receipt" />
-              </div>
-              <button type="button" className="button button-primary" onClick={purchaseInventory}>Record purchase</button>
-            </div>
-          </div>
-
-          <div className="panel product-panel">
-            <div className="card-title">Catalog overview</div>
-            <div className="product-table">
-              <div className="table-row table-head">
-                <span>Product</span>
-                <span>Brand</span>
-                <span>Cost</span>
-                <span>Sell</span>
-                <span>Stock</span>
-                <span>Unit</span>
-                <span>Action</span>
-              </div>
-              {products.length === 0 ? (
-                <div className="table-row empty-state">No products available yet.</div>
-              ) : (
-                products.map(p => (
-                  <div key={p.id} className="table-row">
-                    <span>{p.name}</span>
-                    <span>{p.brand || '-'}</span>
-                    <span>₹{Number(p.cost_price ?? 0).toFixed(2)}</span>
-                    <span>₹{Number(p.sell_price ?? 0).toFixed(2)}</span>
-                    <span>{p.stock_quantity ?? 0}</span>
-                    <span>{p.unit || '-'}</span>
-                    <button type="button" className="button button-ghost" onClick={() => deleteProduct(p.id)}>Delete</button>
+          <div className="list-panel-premium">
+            <div className="premium-list">
+              {products.map(p => (
+                <div key={p.id} className="premium-list-item">
+                  <div className="item-main">
+                    {p.name} <span className="item-meta">— {p.brand || 'Unbranded'}</span>
                   </div>
-                ))
-              )}
-            </div>
-          </div>
-        </section>
-
-        <section className="section billing-section">
-          <div className="section-header">
-            <div>
-              <h2>Billing desk</h2>
-              <p>Create sales invoices and automatically reduce stock for each item sold.</p>
-            </div>
-          </div>
-
-          <div className="panel billing-panel">
-            <div className="form-grid">
-              <div className="field">
-                <label>Item</label>
-                <select className="input-field" onChange={e => setSelectedProduct(e.target.value)} value={selectedProduct}>
-                  <option value="">Select product</option>
-                  {products.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} — ₹{Number(p.sell_price ?? 0).toFixed(2)} / {p.unit || '-'}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>Quantity</label>
-                <input className="input-field" type="number" min="1" step="0.001" value={quantity} onChange={e => setQuantity(e.target.value)} />
-              </div>
-              <div className="field">
-                <label>Payment mode</label>
-                <select className="input-field" value={paymentMode} onChange={e => setPaymentMode(e.target.value)}>
-                  <option value="Cash">Cash</option>
-                  <option value="UPI">UPI</option>
-                </select>
-              </div>
-              <button type="button" className="button button-primary" onClick={addToCart}>Add to cart</button>
-            </div>
-
-            <div className="cart-summary">
-              <div className="cart-header">Current cart</div>
-              {cart.length === 0 ? (
-                <p className="empty-state">Add items to preview the bill.</p>
-              ) : (
-                cart.map((item, index) => (
-                  <div className="cart-item" key={index}>
-                    <div>
-                      <div className="item-name">{item.name}</div>
-                      <div className="item-meta">Qty {item.quantity} {item.unit}</div>
-                    </div>
-                    <div className="item-total">₹{item.total.toFixed(2)}</div>
+                  <div className="item-price">
+                    ${p.sell_price} <span className="italic">{p.unit}</span>
                   </div>
-                ))
-              )}
+                </div>
+              ))}
             </div>
+          </div>
+        </div>
+      </StorySection>
 
-            <div className="summary-box">
-              <div className="summary-item"><span>Subtotal</span><strong>₹{subTotal.toFixed(2)}</strong></div>
-              <div className="summary-item"><span>GST ({(GST_RATE * 100).toFixed(0)}%)</span><strong>₹{gstAmount.toFixed(2)}</strong></div>
-              <div className="summary-item total-row"><span>Total due</span><strong>₹{totalWithTax.toFixed(2)}</strong></div>
+      {/* SECTION 3: BILLING */}
+      <StorySection 
+        id="billing"
+        eyebrow="The Transaction"
+        title="Finalize the Sale"
+        subtitle="Create polished, GST-ready invoices that reflect your brand's commitment to quality."
+      >
+        <div className="billing-experience">
+          <div className="cart-builder">
+            <div className="field">
+              <label>Select Product</label>
+              <select value={selectedProduct} onChange={e => setSelectedProduct(e.target.value)} className="input-field">
+                <option value="">Choose an item...</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
             </div>
-
-            <button type="button" className="button button-primary button-block" onClick={generateBill}>Generate invoice</button>
+            <button onClick={addToCart} className="button">Add to Invoice</button>
           </div>
 
-          {invoiceId && (
-            <div className="panel qr-panel">
-              <div>
-                <div className="card-title">Invoice generated</div>
-                <p>Scan the QR to open the invoice on any device.</p>
+          <div className="invoice-preview-card">
+            <div className="cart-items">
+              {cart.map((item, i) => (
+                <div key={i} className="cart-item-premium">
+                  <span>{item.name} x {item.quantity}</span>
+                  <span className="italic">${item.total}</span>
+                </div>
+              ))}
+            </div>
+            <div className="invoice-totals">
+              <div className="total-row">
+                <span>Subtotal</span>
+                <span>${subTotal}</span>
               </div>
-              <div className="qr-stack">
-                <QRCodeCanvas value={invoiceURL} size={144} />
-                <a className="link-button" href={invoiceURL} target="_blank" rel="noreferrer">View invoice</a>
+              <div className="total-row large">
+                <span>Total <span className="italic">(inc. GST)</span></span>
+                <span>${totalWithTax}</span>
               </div>
             </div>
-          )}
-        </section>
-      </div>
+            <button onClick={generateBill} className="button-block-premium button" disabled={isSaving}>
+              {isSaving ? 'Processing...' : 'Complete Transaction'}
+            </button>
+            {invoiceURL && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="invoice-link">
+                <a href={invoiceURL} target="_blank" className="button-link">View Generated Invoice</a>
+              </motion.div>
+            )}
+          </div>
+        </div>
+      </StorySection>
+
+      {/* FEEDBACK OVERLAY */}
+      <AnimatePresence>
+        {feedback.message && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className={`feedback-toast ${feedback.type}`}
+            onClick={clearFeedback}
+          >
+            {feedback.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
